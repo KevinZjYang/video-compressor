@@ -65,7 +65,7 @@ export interface CompressProgress {
   jobId: string;
   filename: string;
   progress: number;
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
   error?: string;
   outputPath?: string;
   elapsedTime: number; // 已使用时间（秒）

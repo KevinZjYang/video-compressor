@@ -40,6 +40,9 @@ export const useAppStore = defineStore("app", () => {
   const wingetAvailable = ref(false);
   const isInstalling = ref(false);
 
+  // FFmpeg 安装引导弹窗
+  const showFfmpegGuide = ref(false);
+
   // 计算属性
   const hasGpuEncoder = computed(() =>
     encoders.value.some(e => e.hardware !== "software")
@@ -60,40 +63,86 @@ export const useAppStore = defineStore("app", () => {
     }, 0);
   });
 
-  // 根据手动选项计算预估总时间（相对基准时间的倍数）
+  // 根据手动选项计算预估总时间
   const estimatedTimeByManual = computed(() => {
     if (videoList.value.length === 0) return 0;
-    // 基准时间是使用 CPU medium 预设的预估
-    const baseTime = videoList.value.reduce((sum, video) => sum + video.duration * 0.5, 0);
 
-    let speedMultiplier = 1.0;
+    // 编码器基础速度（帧/秒）- 基于经验值
+    let encoderSpeed = 30; // 默认 CPU 编码速度
 
-    // 根据编码器调整速度
+    // 根据编码器调整基础速度
     const encoder = manualOptions.value.encoder.toLowerCase();
-    if (encoder.includes("qsv") || encoder.includes("nvenc") || encoder.includes("amf")) {
-      speedMultiplier *= 0.2; // GPU 编码大约快 5 倍
+    if (encoder.includes("nvenc")) {
+      encoderSpeed = 150; // NVIDIA GPU 编码速度
+    } else if (encoder.includes("qsv")) {
+      encoderSpeed = 100; // Intel QuickSync 速度
+    } else if (encoder.includes("amf")) {
+      encoderSpeed = 80; // AMD GPU 速度
+    } else if (encoder.includes("x264")) {
+      encoderSpeed = 30; // x264 软件编码
+    } else if (encoder.includes("x265") || encoder.includes("hevc")) {
+      encoderSpeed = 15; // x265 软件编码较慢
     }
 
     // 根据 preset 调整速度
     const preset = manualOptions.value.preset;
+    let presetSpeed = 1.0;
     switch (preset) {
-      case "ultrafast": speedMultiplier *= 0.3; break;
-      case "superfast": speedMultiplier *= 0.4; break;
-      case "veryfast": speedMultiplier *= 0.5; break;
-      case "faster": speedMultiplier *= 0.6; break;
-      case "fast": speedMultiplier *= 0.7; break;
-      case "medium": speedMultiplier *= 1.0; break;
-      case "slow": speedMultiplier *= 1.5; break;
-      case "slower": speedMultiplier *= 2.0; break;
-      case "veryslow": speedMultiplier *= 3.0; break;
+      case "ultrafast": presetSpeed = 4.0; break;
+      case "superfast": presetSpeed = 3.0; break;
+      case "veryfast": presetSpeed = 2.0; break;
+      case "faster": presetSpeed = 1.5; break;
+      case "fast": presetSpeed = 1.2; break;
+      case "medium": presetSpeed = 1.0; break;
+      case "slow": presetSpeed = 0.6; break;
+      case "slower": presetSpeed = 0.4; break;
+      case "veryslow": presetSpeed = 0.25; break;
     }
 
-    // 如果使用 CRF 模式，时间会稍长一些
-    if (manualOptions.value.crf !== undefined) {
-      speedMultiplier *= 1.2;
+    // 实际编码速度 = 编码器基础速度 × preset系数
+    const actualSpeed = encoderSpeed * presetSpeed;
+
+    // 计算每个视频的预估时间
+    let totalTime = 0;
+    for (const video of videoList.value) {
+      // 分辨率系数：分辨率越高，编码越慢
+      const pixels = video.width * video.height;
+      let resolutionFactor = 1.0;
+      if (pixels >= 3840 * 2160) {
+        resolutionFactor = 4.0; // 4K
+      } else if (pixels >= 2560 * 1440) {
+        resolutionFactor = 2.0; // 2K
+      } else if (pixels >= 1920 * 1080) {
+        resolutionFactor = 1.0; // 1080p
+      } else if (pixels >= 1280 * 720) {
+        resolutionFactor = 0.5; // 720p
+      } else {
+        resolutionFactor = 0.3; // 480p 及以下
+      }
+
+      // 帧率系数：帧率越高，处理越慢
+      let fpsFactor = 1.0;
+      if (video.fps >= 60) {
+        fpsFactor = 1.5;
+      } else if (video.fps >= 30) {
+        fpsFactor = 1.0;
+      } else {
+        fpsFactor = 0.7;
+      }
+
+      // CRF 模式会稍慢
+      let crfFactor = 1.0;
+      if (manualOptions.value.crf !== undefined) {
+        crfFactor = 1.1;
+      }
+
+      // 预估时间 = 视频时长 × 分辨率系数 × 帧率系数 × CRF系数 / 实际编码速度
+      // 额外增加 20% 的 IO 和开销时间
+      const videoTime = video.duration * resolutionFactor * fpsFactor * crfFactor / actualSpeed * 1.2;
+      totalTime += videoTime;
     }
 
-    return baseTime * speedMultiplier;
+    return totalTime;
   });
 
   const videoEncoders = computed(() =>
@@ -189,12 +238,19 @@ export const useAppStore = defineStore("app", () => {
       await invoke("install_ffmpeg");
       // 重新初始化
       await initFfmpeg();
+      // 关闭引导弹窗
+      showFfmpegGuide.value = false;
     } catch (e) {
       console.error("Install FFmpeg error:", e);
       throw e;
     } finally {
       isInstalling.value = false;
     }
+  }
+
+  // 显示 FFmpeg 安装引导弹窗
+  function showFfmpegGuideDialog() {
+    showFfmpegGuide.value = true;
   }
 
   // 初始化 FFmpeg
@@ -205,8 +261,20 @@ export const useAppStore = defineStore("app", () => {
       await detectGpu();
 
       console.log("Initializing FFmpeg...");
-      ffmpegInfo.value = await invoke<FfmpegInfo>("get_ffmpeg_info");
-      console.log("FFmpeg info:", ffmpegInfo.value);
+      try {
+        ffmpegInfo.value = await invoke<FfmpegInfo>("get_ffmpeg_info");
+        console.log("FFmpeg info:", ffmpegInfo.value);
+      } catch (e) {
+        // FFmpeg 未安装
+        console.log("FFmpeg not found:", e);
+        ffmpegInfo.value = null;
+      }
+
+      // 如果 FFmpeg 未安装，显示引导弹窗
+      if (!ffmpegInfo.value?.available) {
+        await checkWinget();
+        showFfmpegGuide.value = true;
+      }
 
       encoders.value = await invoke<Encoder[]>("get_available_encoders");
       console.log("Encoders:", encoders.value);
@@ -366,6 +434,7 @@ export const useAppStore = defineStore("app", () => {
     isCompressing,
     wingetAvailable,
     isInstalling,
+    showFfmpegGuide,
     gpuType,
     gpuName,
 
@@ -380,6 +449,7 @@ export const useAppStore = defineStore("app", () => {
     initFfmpeg,
     checkWinget,
     installFfmpeg,
+    showFfmpegGuideDialog,
     analyzeVideo,
     addVideo,
     removeVideo,

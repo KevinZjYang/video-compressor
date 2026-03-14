@@ -36,15 +36,19 @@ watch(activeTab, (newTab) => {
 const dragOver = ref(false);
 const expandedVideo = ref<string | null>(null);
 
-// 时间格式化
+// 时间格式化（带单位）
 function formatTime(seconds: number): string {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
+
   if (h > 0) {
-    return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+    return `${h}小时${m}分`;
+  } else if (m > 0) {
+    return `${m}分${s}秒`;
+  } else {
+    return `${s}秒`;
   }
-  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 // 文件大小格式化
@@ -141,6 +145,7 @@ function toggleVideoDetail(path: string) {
     expandedVideo.value = path;
   }
 }
+
 
 // 选择文件
 async function selectFiles() {
@@ -543,23 +548,30 @@ onUnmounted(() => {
             <el-tag type="danger" effect="plain">
               ✗ FFmpeg 未找到
             </el-tag>
-            <el-button
-              v-if="store.wingetAvailable"
-              type="primary"
-              size="small"
-              :loading="store.isInstalling"
-              @click="store.installFfmpeg"
-            >
-              {{ store.isInstalling ? '安装中...' : '一键安装 FFmpeg' }}
-            </el-button>
-            <el-button
-              v-else
-              type="primary"
-              size="small"
-              @click="selectFiles"
-            >
-              选择本地 FFmpeg
-            </el-button>
+            <template v-if="store.isInstalling">
+              <el-tag type="warning" effect="plain" style="margin-right: 8px;">
+                正在安装 FFmpeg...
+              </el-tag>
+              <el-progress :percentage="50" :indeterminate="true" :duration="3" :show-text="false" style="width: 120px; display: inline-block;" />
+            </template>
+            <template v-else>
+              <el-button
+                v-if="store.wingetAvailable"
+                type="primary"
+                size="small"
+                @click="store.installFfmpeg"
+              >
+                一键安装 FFmpeg
+              </el-button>
+              <el-button
+                v-else
+                type="primary"
+                size="small"
+                @click="selectFiles"
+              >
+                选择本地 FFmpeg
+              </el-button>
+            </template>
           </template>
           <!-- GPU 加速 -->
           <el-tag v-if="store.hasGpuEncoder" type="success" effect="plain">
@@ -608,6 +620,7 @@ onUnmounted(() => {
                 <div class="video-icon">
                   <template v-if="getVideoProgress(video.filename)?.status === 'running'">⚡</template>
                   <template v-else-if="getVideoProgress(video.filename)?.status === 'completed'">✅</template>
+                  <template v-else-if="getVideoProgress(video.filename)?.status === 'cancelled'">⚠️</template>
                   <template v-else-if="getVideoProgress(video.filename)?.status === 'failed'">❌</template>
                   <template v-else>🎥</template>
                 </div>
@@ -624,6 +637,9 @@ onUnmounted(() => {
                     <template v-else-if="getVideoProgress(video.filename)?.status === 'completed'">
                       <span class="status-completed">压缩完成</span>
                     </template>
+                    <template v-else-if="getVideoProgress(video.filename)?.status === 'cancelled'">
+                      <span class="status-failed">已取消</span>
+                    </template>
                     <template v-else-if="getVideoProgress(video.filename)?.status === 'failed'">
                       <span class="status-failed">压缩失败</span>
                     </template>
@@ -635,7 +651,18 @@ onUnmounted(() => {
                     <span class="expand-hint">{{ expandedVideo === video.path ? '▼ 点击收起详情' : '▶ 点击查看详情' }}</span>
                   </div>
                 </div>
+                <!-- 停止按钮 - 只在正在压缩时显示 -->
                 <el-button
+                  v-if="getVideoProgress(video.filename)?.status === 'running'"
+                  type="warning"
+                  size="small"
+                  @click.stop="store.stopCompress()"
+                >
+                  停止
+                </el-button>
+                <!-- 删除按钮 - 未在压缩时显示 -->
+                <el-button
+                  v-else
                   type="danger"
                   circle
                   size="small"

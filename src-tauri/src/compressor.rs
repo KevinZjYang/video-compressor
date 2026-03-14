@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Window};
 
@@ -92,6 +92,13 @@ static STOP_FLAG: AtomicBool = AtomicBool::new(false);
 #[tauri::command]
 pub fn stop_compress() {
     STOP_FLAG.store(true, Ordering::SeqCst);
+    // 在 Windows 上使用 taskkill 杀死所有 ffmpeg 进程
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/F", "/IM", "ffmpeg.exe"])
+            .output();
+    }
 }
 
 /// 获取预估
@@ -297,8 +304,16 @@ pub async fn compress_videos(
         // 等待完成
         let status = child.wait().map_err(|e| e.to_string())?;
 
+        // 清除当前子进程
         let progress = if status.success() { 100 } else { 0 };
-        let result_status = if status.success() { "completed" } else { "failed" };
+        // 如果是被取消的，状态为 cancelled
+        let result_status = if STOP_FLAG.load(Ordering::SeqCst) {
+            "cancelled"
+        } else if status.success() {
+            "completed"
+        } else {
+            "failed"
+        };
         let elapsed = start_time.elapsed().as_secs_f64();
 
         // 发送完成事件

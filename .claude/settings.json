@@ -18,7 +18,13 @@
       "Bash(powershell -Command \"Get-WmiObject Win32_VideoController | Select-Object Name, DriverVersion\")",
       "Bash(powershell -Command \"Get-CimInstance Win32_VideoController | Select-Object -First 1 -ExpandProperty Name\")",
       "Bash(cargo build:*)",
-      "Bash(taskkill //F //PID 31868)"
+      "Bash(taskkill //F //PID 31868)",
+      "Bash(winget search:*)",
+      "Bash(taskkill /F /IM video-compressor-k.exe)",
+      "Bash(taskkill /F /IM node.exe)"
+    ],
+    "additionalDirectories": [
+      "\\temp\\readonly"
     ]
   }
 }

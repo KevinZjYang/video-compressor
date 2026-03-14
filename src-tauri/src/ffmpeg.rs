@@ -134,7 +134,20 @@ pub fn get_ffmpeg_info() -> Result<FfmpegInfo, String> {
 /// 检查 winget 是否可用
 #[tauri::command]
 pub fn check_winget() -> bool {
-    create_hidden_command("winget").arg("--version").output().is_ok()
+    // 使用 PowerShell 检测 winget（不使用 create_hidden_command 以避免创建窗口标志冲突）
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let output = Command::new("powershell")
+        .creation_flags(CREATE_NO_WINDOW)
+        .args(["-Command", "Get-Command winget -ErrorAction SilentlyContinue"])
+        .output();
+
+    match output {
+        Ok(o) => o.status.success(),
+        Err(_) => false,
+    }
 }
 
 /// 安装 FFmpeg

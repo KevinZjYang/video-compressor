@@ -78,6 +78,7 @@ pub fn run() {
             stop_compress,
             trim_video,
             install_ffmpeg,
+            check_winget,
             get_gpu_name
         ])
         .setup(|app| {
