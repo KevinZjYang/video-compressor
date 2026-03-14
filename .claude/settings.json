@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo check:*)",
+      "Bash(where ffmpeg:*)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :1420)",
+      "Bash(taskkill //F //PID 33992)",
+      "Bash(taskkill //F //PID 35740)",
+      "Bash(taskkill //F //PID 38076)",
+      "Bash(\"d:/Github/video-compressor/resources/ffmpeg/ffmpeg.exe\" -encoders)",
+      "Bash(d:/Github/video-compressor/resources/ffmpeg/ffmpeg.exe -encoders)",
+      "Bash(ffmpeg -version)",
+      "Bash(cmd /c \"ffmpeg -version\")",
+      "Bash(cmd /c \"dir /s /b C:\\\\ffmpeg.exe 2>nul\")",
+      "Bash(cmd /c \"C:\\\\Users\\\\yzj03\\\\AppData\\\\Local\\\\Microsoft\\\\WinGet\\\\Links\\\\ffmpeg.exe -encoders\")",
+      "WebFetch(domain:minimax-algeng-chat-tts.oss-cn-wulanchabu.aliyuncs.com)",
+      "Bash(powershell -Command \"Get-WmiObject Win32_VideoController | Select-Object Name, DriverVersion\")",
+      "Bash(powershell -Command \"Get-CimInstance Win32_VideoController | Select-Object -First 1 -ExpandProperty Name\")"
+    ]
+  }
+}

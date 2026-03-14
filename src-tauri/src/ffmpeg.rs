@@ -1,0 +1,134 @@
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::process::Command;
+
+/// FFmpeg 信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FfmpegInfo {
+    pub version: String,
+    pub path: String,
+    pub available: bool,
+}
+
+/// 获取 FFmpeg 路径
+pub fn get_ffmpeg_path() -> Option<PathBuf> {
+    // 1. 先检查系统 PATH - 直接运行 ffmpeg 看是否可用
+    if let Ok(output) = Command::new("ffmpeg").arg("-version").output() {
+        if output.status.success() {
+            // ffmpeg 在 PATH 中，使用 which/where 获取路径
+            if let Ok(path_output) = Command::new("where").arg("ffmpeg").output() {
+                if path_output.status.success() {
+                    let path_str = String::from_utf8_lossy(&path_output.stdout);
+                    if let Some(first) = path_str.lines().next() {
+                        return Some(PathBuf::from(first.trim()));
+                    }
+                }
+            }
+            // 如果 where 失败，返回默认命令
+            return Some(PathBuf::from("ffmpeg"));
+        }
+    }
+
+    // 2. 使用 where 命令查找
+    if let Ok(output) = Command::new("where").arg("ffmpeg").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout);
+            if let Some(first) = path.lines().next() {
+                let p = PathBuf::from(first.trim());
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    // 4. 检查 WinGet 默认安装目录
+    let winget_path = std::env::var("LOCALAPPDATA")
+        .map(|p| PathBuf::from(p).join("Microsoft").join("WinGet").join("Links").join("ffmpeg.exe"))
+        .ok();
+    if let Some(p) = winget_path {
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    // 5. 直接检查当前工作目录的 resources/ffmpeg/
+    let current_dir = std::env::current_dir().ok();
+    if let Some(dir) = current_dir {
+        let ffmpeg_path = dir.join("resources").join("ffmpeg").join("ffmpeg.exe");
+        if ffmpeg_path.exists() {
+            return Some(ffmpeg_path);
+        }
+    }
+
+    // 7. 检查运行目录下的 resources/ffmpeg (开发模式: target/debug/)
+    if let Ok(exe_dir) = std::env::current_exe() {
+        if let Some(dir) = exe_dir.parent() {
+            let ffmpeg_path = dir.join("resources").join("ffmpeg").join("ffmpeg.exe");
+            if ffmpeg_path.exists() {
+                return Some(ffmpeg_path);
+            }
+            // 尝试多级父目录
+            if let Some(parent) = dir.parent() {
+                let ffmpeg_path2 = parent.join("resources").join("ffmpeg").join("ffmpeg.exe");
+                if ffmpeg_path2.exists() {
+                    return Some(ffmpeg_path2);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// 获取 FFmpeg 版本
+fn get_ffmpeg_version(path: &PathBuf) -> String {
+    if let Ok(output) = Command::new(path).arg("-version").output() {
+        if output.status.success() {
+            let version = String::from_utf8_lossy(&output.stdout);
+            // 提取版本号，如 "ffmpeg version 6.1"
+            if let Some(line) = version.lines().next() {
+                if let Some(v) = line.split("version ").nth(1) {
+                    return v.split_whitespace().next().unwrap_or("unknown").to_string();
+                }
+            }
+        }
+    }
+    "unknown".to_string()
+}
+
+/// 获取 FFmpeg 信息
+#[tauri::command]
+pub fn get_ffmpeg_info() -> Result<FfmpegInfo, String> {
+    let path = get_ffmpeg_path().ok_or("FFmpeg not found")?;
+    let version = get_ffmpeg_version(&path);
+
+    Ok(FfmpegInfo {
+        version,
+        path: path.to_string_lossy().to_string(),
+        available: true,
+    })
+}
+
+/// 检查 winget 是否可用
+#[tauri::command]
+pub fn check_winget() -> bool {
+    Command::new("winget").arg("--version").output().is_ok()
+}
+
+/// 安装 FFmpeg
+#[tauri::command]
+pub async fn install_ffmpeg() -> Result<String, String> {
+    // 使用 winget 安装 FFmpeg
+    let output = Command::new("winget")
+        .args(["install", "-e", "--id", "Gyan.FFmpeg", "--accept-source-agreements", "--accept-package-agreements"])
+        .output()
+        .map_err(|e| format!("Failed to run winget: {}", e))?;
+
+    if output.status.success() {
+        Ok("FFmpeg installed successfully".to_string())
+    } else {
+        let error = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Failed to install FFmpeg: {}", error))
+    }
+}
