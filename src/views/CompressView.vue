@@ -1,14 +1,36 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
-import { useRouter } from "vue-router";
+import { ref, computed, watch } from "vue";
 import { useAppStore } from "../stores/app";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { onMounted, onUnmounted } from "vue";
-import type { CompressProgress, CompressPreset } from "../types";
+import type { CompressProgress, CompressPreset, VideoInfo } from "../types";
 
-const router = useRouter();
 const store = useAppStore();
+
+// Tab 状态
+const activeTab = ref<'compress' | 'trim'>('compress');
+
+// ==================== 剪切功能相关状态 ====================
+const trimVideoPath = ref("");
+const trimVideoSrc = ref("");
+const trimVideoInfo = ref<VideoInfo | null>(null);
+const trimIsPlaying = ref(false);
+const trimCurrentTime = ref(0);
+const trimDuration = ref(0);
+const trimStartTime = ref(0);
+const trimEndTime = ref(0);
+const trimVideoRef = ref<HTMLVideoElement | null>(null);
+const isTrimming = ref(false);
+const trimProgress = ref(0);
+
+// 监听Tab切换，当切换到trim时检测GPU
+watch(activeTab, (newTab) => {
+  if (newTab === 'trim') {
+    // 切换到剪切Tab时，可以添加一些初始化逻辑
+  }
+});
 
 // 本地状态
 const dragOver = ref(false);
@@ -160,11 +182,6 @@ async function onDrop(e: DragEvent) {
   }
 }
 
-// 切换到剪切页面
-function goToTrim() {
-  router.push("/trim");
-}
-
 // 获取视频对应的压缩进度
 function getVideoProgress(filename: string): CompressProgress | undefined {
   return store.compressProgress.find(p => p.filename === filename);
@@ -233,6 +250,255 @@ async function startCompress() {
 
   await store.startCompress(jobs);
 }
+
+// ==================== 剪切功能相关函数 ====================
+
+// 格式化时间
+function trimFormatTime(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  const ms = Math.floor((seconds % 1) * 10);
+  if (h > 0) {
+    return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}.${ms}`;
+  }
+  return `${m}:${s.toString().padStart(2, "0")}.${ms}`;
+}
+
+// 解析时间字符串为秒数
+function trimParseTime(timeStr: string): number {
+  const parts = timeStr.split(":");
+  let seconds = 0;
+  if (parts.length === 3) {
+    seconds = parseInt(parts[0]) * 3600 + parseInt(parts[1]) * 60 + parseFloat(parts[2]);
+  } else if (parts.length === 2) {
+    seconds = parseInt(parts[0]) * 60 + parseFloat(parts[1]);
+  }
+  return seconds;
+}
+
+// 选择视频（剪切）
+async function selectTrimVideo() {
+  const file = await open({
+    multiple: false,
+    filters: [
+      { name: "视频文件", extensions: ["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm"] }
+    ]
+  });
+
+  if (file) {
+    trimVideoPath.value = file as string;
+
+    // 修复视频播放问题：使用convertFileSrc转换路径
+    const filePath = file as string;
+    try {
+      // 直接使用convertFileSrc，它会自动处理Windows路径
+      trimVideoSrc.value = convertFileSrc(filePath);
+      console.log('Video src:', trimVideoSrc.value);
+    } catch (e) {
+      console.error('Failed to convert file src:', e);
+      // 回退方案
+      const normalizedPath = filePath.replace(/\\/g, '/');
+      trimVideoSrc.value = 'file://' + normalizedPath;
+      console.log('Fallback video src:', trimVideoSrc.value);
+    }
+
+    try {
+      trimVideoInfo.value = await invoke<VideoInfo>("analyze_video", { path: file });
+      trimDuration.value = trimVideoInfo.value.duration;
+      trimStartTime.value = 0;
+      trimEndTime.value = trimVideoInfo.value.duration;
+    } catch (e) {
+      console.error("Failed to analyze video:", e);
+    }
+  }
+}
+
+// 时间更新
+function onTrimTimeUpdate() {
+  if (!trimVideoRef.value) return;
+  trimCurrentTime.value = trimVideoRef.value.currentTime;
+
+  if (trimCurrentTime.value >= trimEndTime.value) {
+    trimVideoRef.value.pause();
+    trimIsPlaying.value = false;
+    trimVideoRef.value.currentTime = trimStartTime.value;
+  }
+}
+
+// 视频加载错误处理
+function onTrimVideoError(event: Event) {
+  const video = event.target as HTMLVideoElement;
+  console.error('Video load error:', video.error);
+  console.error('Video src:', trimVideoSrc.value);
+  console.error('Video path:', trimVideoPath.value);
+  const errorMsg = video.error?.message || '';
+  if (errorMsg.includes('Format error') || errorMsg.includes('MEDIA_ELEMENT_ERROR')) {
+    alert('视频格式不支持。WebView2可能不支持当前视频的编码格式。\n\n建议：\n1. 尝试使用MP4格式(H.264编码)的视频\n2. 确保视频文件未损坏\n3. 剪切功能仍然可用，导出时会自动转码');
+  } else {
+    alert('视频加载失败: ' + errorMsg);
+  }
+}
+
+// 视频加载成功
+function onTrimVideoLoaded(event: Event) {
+  console.log('Video loaded successfully');
+  const video = event.target as HTMLVideoElement;
+  console.log('Duration:', video.duration);
+}
+
+// 跳转到指定时间
+function trimSeekTo(time: number) {
+  if (!trimVideoRef.value) return;
+  trimVideoRef.value.currentTime = time;
+  trimCurrentTime.value = time;
+}
+
+// 设置开始时间
+function setTrimStartTime(time: number) {
+  // 限制范围：0 到 结束时间-0.1
+  const minTime = 0;
+  const maxTime = trimEndTime.value - 0.1;
+  trimStartTime.value = Math.max(minTime, Math.min(time, maxTime));
+  trimSeekTo(trimStartTime.value);
+}
+
+// 设置结束时间
+function setTrimEndTime(time: number) {
+  // 限制范围：开始时间+0.1 到 视频总时长
+  const minTime = trimStartTime.value + 0.1;
+  const maxTime = trimDuration.value;
+  trimEndTime.value = Math.max(minTime, Math.min(time, maxTime));
+}
+
+// 调整时间
+function adjustTrimStartTime(delta: number) {
+  setTrimStartTime(trimStartTime.value + delta);
+}
+
+function adjustTrimEndTime(delta: number) {
+  setTrimEndTime(trimEndTime.value + delta);
+}
+
+// 点击时间轴跳转
+function onTimelineClick(event: MouseEvent) {
+  if (!trimDuration.value) return;
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const percent = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+  const time = percent * trimDuration.value;
+  trimSeekTo(time);
+}
+
+// 拖拽状态
+const trimDragging = ref<'start' | 'end' | null>(null);
+
+function startTrimDragging(type: 'start' | 'end', event: MouseEvent) {
+  event.preventDefault();
+  event.stopPropagation();
+  trimDragging.value = type;
+
+  // 获取时间轴容器的引用
+  const trackElement = (event.currentTarget as HTMLElement).parentElement;
+  if (!trackElement) return;
+
+  const rect = trackElement.getBoundingClientRect();
+
+  const onMouseMove = (e: MouseEvent) => {
+    if (!trimDuration.value) return;
+    const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const time = percent * trimDuration.value;
+
+    if (trimDragging.value === 'start') {
+      setTrimStartTime(Math.min(time, trimEndTime.value - 0.1));
+    } else if (trimDragging.value === 'end') {
+      setTrimEndTime(Math.max(time, trimStartTime.value + 0.1));
+    }
+  };
+
+  const onMouseUp = () => {
+    trimDragging.value = null;
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  };
+
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mouseup', onMouseUp);
+}
+
+// 剪切后时长
+const trimmedDuration = computed(() => trimEndTime.value - trimStartTime.value);
+
+// 预览剪切效果
+function previewTrim() {
+  trimSeekTo(trimStartTime.value);
+  trimIsPlaying.value = true;
+  if (trimVideoRef.value) {
+    trimVideoRef.value.play();
+  }
+}
+
+// 导出视频
+async function exportTrimVideo() {
+  if (!trimVideoPath.value) return;
+
+  const outputPath = await save({
+    defaultPath: trimVideoPath.value.replace(/\.[^.]+$/, "_trimmed.mp4"),
+    filters: [
+      { name: "MP4", extensions: ["mp4"] },
+      { name: "MKV", extensions: ["mkv"] }
+    ]
+  });
+
+  if (!outputPath) return;
+
+  isTrimming.value = true;
+  trimProgress.value = 0;
+
+  try {
+    await invoke("trim_video", {
+      inputPath: trimVideoPath.value,
+      startTime: trimStartTime.value,
+      endTime: trimEndTime.value,
+      outputPath
+    });
+  } catch (e) {
+    console.error("Trim failed:", e);
+    alert("剪切失败: " + e);
+  } finally {
+    isTrimming.value = false;
+  }
+}
+
+// 监听剪切进度
+let trimUnlisten: (() => void) | null = null;
+
+onMounted(async () => {
+  // 检查 winget 是否可用
+  await store.checkWinget();
+
+  unlisten = await listen<CompressProgress>("compress-progress", (event) => {
+    const progress = event.payload;
+    const index = store.compressProgress.findIndex(p => p.jobId === progress.jobId);
+    if (index > -1) {
+      store.compressProgress[index] = progress;
+    } else {
+      store.compressProgress.push(progress);
+    }
+  });
+
+  // 监听剪切进度
+  trimUnlisten = await listen<{ status: string; progress: number }>("trim-progress", (event) => {
+    trimProgress.value = event.payload.progress;
+    if (event.payload.status === "completed") {
+      isTrimming.value = false;
+    }
+  });
+});
+
+onUnmounted(() => {
+  if (unlisten) unlisten();
+  if (trimUnlisten) trimUnlisten();
+});
 </script>
 
 <template>
@@ -244,18 +510,27 @@ async function startCompress() {
         <span class="title">视频压缩器</span>
       </div>
       <div class="nav-tabs">
-        <div class="nav-tab active">
+        <div
+          class="nav-tab"
+          :class="{ active: activeTab === 'compress' }"
+          @click="activeTab = 'compress'"
+        >
           <span class="icon">📦</span>
           压缩
         </div>
-        <div class="nav-tab" @click="goToTrim">
+        <div
+          class="nav-tab"
+          :class="{ active: activeTab === 'trim' }"
+          @click="activeTab = 'trim'"
+        >
           <span class="icon">✂️</span>
           剪切
         </div>
       </div>
     </div>
 
-    <div class="main-content">
+    <!-- 压缩Tab内容 -->
+    <div class="main-content" v-show="activeTab === 'compress'">
       <!-- 左侧：文件选择 -->
       <div class="left-panel">
         <!-- FFmpeg 状态 - 放在最上面 -->
@@ -541,6 +816,183 @@ async function startCompress() {
         </div>
       </div>
     </div>
+
+    <!-- 剪切Tab内容 -->
+    <div class="main-content" v-show="activeTab === 'trim'">
+      <!-- 左侧：视频预览 -->
+      <div class="left-panel">
+        <div class="video-container">
+          <video
+            v-if="trimVideoSrc"
+            ref="trimVideoRef"
+            :src="trimVideoSrc"
+            @timeupdate="onTrimTimeUpdate"
+            @loadedmetadata="trimDuration = trimVideoRef?.duration || 0"
+            @error="onTrimVideoError"
+            @loadeddata="onTrimVideoLoaded"
+            controls
+            playsinline
+          />
+          <div v-else class="video-placeholder" @click="selectTrimVideo">
+            <div class="placeholder-icon">🎬</div>
+            <div class="placeholder-text">点击选择视频</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧：剪切设置 -->
+      <div class="right-panel">
+        <!-- 未选择视频时的提示 -->
+        <div class="panel-card empty-hint" v-if="!trimVideoSrc">
+          <div class="empty-icon">🎬</div>
+          <div class="empty-text">请在左侧选择要剪切的视频</div>
+        </div>
+
+        <!-- 视频信息 -->
+        <div class="panel-card" v-if="trimVideoInfo">
+          <div class="card-header">
+            <div class="card-title">视频信息</div>
+            <el-button size="small" @click="selectTrimVideo">更换视频</el-button>
+          </div>
+          <div class="info-grid">
+            <div class="info-item full-width">
+              <span class="label">文件名</span>
+              <span class="value">{{ trimVideoInfo.filename }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">分辨率</span>
+              <span class="value">{{ trimVideoInfo.width }} × {{ trimVideoInfo.height }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">时长</span>
+              <span class="value">{{ trimFormatTime(trimVideoInfo.duration) }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">帧率</span>
+              <span class="value">{{ trimVideoInfo.fps }} fps</span>
+            </div>
+            <div class="info-item">
+              <span class="label">文件大小</span>
+              <span class="value">{{ formatSize(trimVideoInfo.size) }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">视频码率</span>
+              <span class="value">{{ formatBitrate(trimVideoInfo.bitrate) }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">视频编码</span>
+              <span class="value">{{ trimVideoInfo.codec }}</span>
+            </div>
+            <div class="info-item" v-if="trimVideoInfo.audioCodec">
+              <span class="label">音频编码</span>
+              <span class="value">{{ trimVideoInfo.audioCodec }}</span>
+            </div>
+            <div class="info-item" v-if="trimVideoInfo.audioBitrate">
+              <span class="label">音频码率</span>
+              <span class="value">{{ formatBitrate(trimVideoInfo.audioBitrate) }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 时间轴 -->
+        <div class="panel-card" v-if="trimVideoSrc && trimDuration > 0">
+          <div class="card-title">选择时间段</div>
+
+          <!-- 时间轴滑块 -->
+          <div class="timeline-container">
+            <div
+              class="timeline-track"
+              @click="onTimelineClick"
+            >
+              <div
+                class="timeline-range"
+                :style="{
+                  left: (trimStartTime / trimDuration * 100) + '%',
+                  width: ((trimEndTime - trimStartTime) / trimDuration * 100) + '%'
+                }"
+              />
+              <div
+                class="timeline-handle start"
+                :style="{ left: (trimStartTime / trimDuration * 100) + '%' }"
+                @mousedown="startTrimDragging('start', $event)"
+              />
+              <div
+                class="timeline-handle end"
+                :style="{ left: (trimEndTime / trimDuration * 100) + '%' }"
+                @mousedown="startTrimDragging('end', $event)"
+              />
+              <div
+                class="timeline-playhead"
+                :style="{ left: (trimCurrentTime / trimDuration * 100) + '%' }"
+              />
+            </div>
+          </div>
+
+          <!-- 时间输入 -->
+          <div class="time-inputs">
+            <div class="time-input-group">
+              <label>开始时间</label>
+              <div class="input-row">
+                <el-input
+                  :model-value="trimFormatTime(trimStartTime)"
+                  @change="(v: string) => setTrimStartTime(trimParseTime(v))"
+                  size="small"
+                />
+                <el-button size="small" @click="adjustTrimStartTime(0.1)">+0.1s</el-button>
+                <el-button size="small" @click="adjustTrimStartTime(-0.1)">-0.1s</el-button>
+                <el-button size="small" @click="adjustTrimStartTime(1)">+1s</el-button>
+                <el-button size="small" @click="adjustTrimStartTime(-1)">-1s</el-button>
+              </div>
+            </div>
+
+            <div class="time-input-group">
+              <label>结束时间</label>
+              <div class="input-row">
+                <el-input
+                  :model-value="trimFormatTime(trimEndTime)"
+                  @change="(v: string) => setTrimEndTime(trimParseTime(v))"
+                  size="small"
+                />
+                <el-button size="small" @click="adjustTrimEndTime(0.1)">+0.1s</el-button>
+                <el-button size="small" @click="adjustTrimEndTime(-0.1)">-0.1s</el-button>
+                <el-button size="small" @click="adjustTrimEndTime(1)">+1s</el-button>
+                <el-button size="small" @click="adjustTrimEndTime(-1)">-1s</el-button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 剪切后时长 -->
+          <div class="trim-duration">
+            剪切后时长: <strong>{{ trimFormatTime(trimmedDuration) }}</strong>
+          </div>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="panel-card actions" v-if="trimVideoSrc">
+          <el-button
+            type="primary"
+            size="large"
+            @click="previewTrim"
+          >
+            预览剪切效果
+          </el-button>
+          <el-button
+            type="success"
+            size="large"
+            :loading="isTrimming"
+            @click="exportTrimVideo"
+          >
+            {{ isTrimming ? '导出中...' : '导出视频' }}
+          </el-button>
+        </div>
+
+        <!-- 进度 -->
+        <div class="panel-card" v-if="isTrimming">
+          <el-progress :percentage="trimProgress" status="success" />
+          <div class="trim-hint">正在导出视频，请稍候...</div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -610,14 +1062,21 @@ async function startCompress() {
   overflow: hidden;
 }
 
+.main-content > .left-panel,
+.main-content > .right-panel {
+  display: flex;
+  flex-direction: column;
+}
+
 .left-panel {
-  width: 380px;
-  min-width: 380px;
+  width: 480px;
+  min-width: 480px;
   display: flex;
   flex-direction: column;
   gap: 16px;
   overflow-y: auto;
   padding: 16px;
+  min-height: 0;
 }
 
 .drop-zone {
@@ -837,6 +1296,7 @@ async function startCompress() {
   flex-direction: column;
   gap: 16px;
   overflow-y: auto;
+  min-height: 0;
 }
 
 .panel-card {
@@ -849,7 +1309,17 @@ async function startCompress() {
   font-size: 16px;
   font-weight: 600;
   color: #303133;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 16px;
+}
+
+.card-header .card-title {
+  margin-bottom: 0;
 }
 
 .preset-grid {
@@ -972,5 +1442,199 @@ async function startCompress() {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 剪切功能样式 */
+.video-container {
+  flex: 1;
+  background: #000;
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+}
+
+.video-container video {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.video-placeholder {
+  text-align: center;
+  cursor: pointer;
+  color: #fff;
+}
+
+.placeholder-icon {
+  font-size: 64px;
+  margin-bottom: 16px;
+}
+
+.placeholder-text {
+  font-size: 16px;
+}
+
+.playback-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  background: #fff;
+  border-radius: 8px;
+  margin-top: 16px;
+}
+
+.time-display {
+  font-size: 14px;
+  color: #606266;
+  font-family: monospace;
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.info-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.info-item.full-width {
+  grid-column: 1 / -1;
+}
+
+.info-item .label {
+  font-size: 12px;
+  color: #909399;
+}
+
+.info-item .value {
+  font-size: 14px;
+  color: #303133;
+}
+
+.timeline-container {
+  margin-bottom: 20px;
+}
+
+.timeline-track {
+  position: relative;
+  height: 24px;
+  background: #e4e7ed;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.timeline-range {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: #409eff;
+  opacity: 0.3;
+  border-radius: 4px;
+}
+
+.timeline-handle {
+  position: absolute;
+  top: 50%;
+  width: 8px;
+  height: 28px;
+  background: #409eff;
+  border-radius: 3px;
+  transform: translate(-50%, -50%);
+  cursor: ew-resize;
+  z-index: 10;
+}
+
+.timeline-handle.start {
+  background: #67c23a;
+}
+
+.timeline-handle.end {
+  background: #e6a23c;
+}
+
+.timeline-playhead {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: #f56c6c;
+  transform: translateX(-50%);
+}
+
+.time-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.time-input-group label {
+  display: block;
+  font-size: 14px;
+  color: #606266;
+  margin-bottom: 8px;
+}
+
+.input-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.input-row .el-input {
+  width: 140px;
+}
+
+.trim-duration {
+  text-align: center;
+  padding: 12px;
+  background: #f0f9ff;
+  border-radius: 8px;
+  color: #409eff;
+}
+
+.trim-duration strong {
+  font-size: 18px;
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+}
+
+.actions .el-button {
+  flex: 1;
+}
+
+.trim-hint {
+  text-align: center;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.empty-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  text-align: center;
+}
+
+.empty-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.empty-text {
+  font-size: 14px;
+  color: #909399;
 }
 </style>

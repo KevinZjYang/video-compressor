@@ -63,7 +63,20 @@ async function selectVideo() {
 
   if (file) {
     videoPath.value = file as string;
-    videoSrc.value = convertFileSrc(file as string);
+
+    // 修复视频播放问题：确保路径格式正确
+    try {
+      // 标准化路径：将反斜杠转换为正斜杠
+      const normalizedPath = (file as string).replace(/\\/g, '/');
+      videoSrc.value = convertFileSrc(normalizedPath);
+      console.log('Video src:', videoSrc.value);
+    } catch (e) {
+      console.error('Failed to convert file src:', e);
+      // 回退方案：直接使用file协议
+      const encodedPath = encodeURI('file:///' + (file as string).replace(/\\/g, '/'));
+      videoSrc.value = encodedPath;
+      console.log('Fallback video src:', videoSrc.value);
+    }
 
     // 分析视频
     try {
@@ -75,6 +88,14 @@ async function selectVideo() {
       console.error("Failed to analyze video:", e);
     }
   }
+}
+
+// 视频加载错误处理
+function onVideoError(event: Event) {
+  const video = event.target as HTMLVideoElement;
+  console.error('Video load error:', video.error);
+  console.log('Video src:', videoSrc.value);
+  console.log('Video path:', videoPath.value);
 }
 
 // 播放/暂停
@@ -246,6 +267,7 @@ function goToCompress() {
             :src="videoSrc"
             @timeupdate="onTimeUpdate"
             @loadedmetadata="duration = videoRef?.duration || 0"
+            @error="onVideoError"
           />
           <div v-else class="video-placeholder" @click="selectVideo">
             <div class="placeholder-icon">🎬</div>

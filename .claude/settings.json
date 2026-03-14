@@ -17,7 +17,8 @@
       "WebFetch(domain:minimax-algeng-chat-tts.oss-cn-wulanchabu.aliyuncs.com)",
       "Bash(powershell -Command \"Get-WmiObject Win32_VideoController | Select-Object Name, DriverVersion\")",
       "Bash(powershell -Command \"Get-CimInstance Win32_VideoController | Select-Object -First 1 -ExpandProperty Name\")",
-      "Bash(cargo build:*)"
+      "Bash(cargo build:*)",
+      "Bash(taskkill //F //PID 31868)"
     ]
   }
 }
