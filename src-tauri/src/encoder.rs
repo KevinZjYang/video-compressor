@@ -3,6 +3,21 @@ use std::process::Command;
 
 use crate::ffmpeg::get_ffmpeg_path;
 
+/// 跨平台创建隐藏窗口的命令
+#[cfg(windows)]
+fn create_hidden_command(program: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let mut cmd = Command::new(program);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+#[cfg(not(windows))]
+fn create_hidden_command(program: &str) -> Command {
+    Command::new(program)
+}
+
 /// 编码器类型
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum HardwareType {
@@ -45,7 +60,7 @@ impl HardwareType {
 pub fn get_available_encoders() -> Result<Vec<Encoder>, String> {
     let ffmpeg_path = get_ffmpeg_path().ok_or("FFmpeg not found")?;
 
-    let output = Command::new(&ffmpeg_path)
+    let output = create_hidden_command(ffmpeg_path.to_str().unwrap_or(""))
         .arg("-encoders")
         .output()
         .map_err(|e| e.to_string())?;

@@ -165,6 +165,11 @@ function goToTrim() {
   router.push("/trim");
 }
 
+// 获取视频对应的压缩进度
+function getVideoProgress(filename: string): CompressProgress | undefined {
+  return store.compressProgress.find(p => p.filename === filename);
+}
+
 // 监听压缩进度
 let unlisten: (() => void) | null = null;
 
@@ -177,6 +182,8 @@ onMounted(async () => {
     const index = store.compressProgress.findIndex(p => p.jobId === progress.jobId);
     if (index > -1) {
       store.compressProgress[index] = progress;
+    } else {
+      store.compressProgress.push(progress);
     }
   });
 });
@@ -317,13 +324,39 @@ async function startCompress() {
             >
               <div
                 class="video-item"
-                :class="{ expanded: expandedVideo === video.path }"
+                :class="{
+                  expanded: expandedVideo === video.path,
+                  compressing: getVideoProgress(video.filename)?.status === 'running'
+                }"
                 @click="toggleVideoDetail(video.path)"
               >
-                <div class="video-icon">🎥</div>
+                <div class="video-icon">
+                  <template v-if="getVideoProgress(video.filename)?.status === 'running'">⚡</template>
+                  <template v-else-if="getVideoProgress(video.filename)?.status === 'completed'">✅</template>
+                  <template v-else-if="getVideoProgress(video.filename)?.status === 'failed'">❌</template>
+                  <template v-else>🎥</template>
+                </div>
                 <div class="video-info">
                   <div class="video-name">{{ video.filename }}</div>
-                  <div class="video-meta">
+                  <div class="video-meta" v-if="getVideoProgress(video.filename) as CompressProgress">
+                    <template v-if="getVideoProgress(video.filename)?.status === 'running'">
+                      <span class="progress-text">
+                        {{ getVideoProgress(video.filename)?.progress }}% |
+                        已用: {{ formatTime(getVideoProgress(video.filename)?.elapsedTime || 0) }} |
+                        剩余: {{ formatTime(getVideoProgress(video.filename)?.estimatedRemainingTime || 0) }}
+                      </span>
+                    </template>
+                    <template v-else-if="getVideoProgress(video.filename)?.status === 'completed'">
+                      <span class="status-completed">压缩完成</span>
+                    </template>
+                    <template v-else-if="getVideoProgress(video.filename)?.status === 'failed'">
+                      <span class="status-failed">压缩失败</span>
+                    </template>
+                    <template v-else>
+                      <span class="expand-hint">{{ expandedVideo === video.path ? '▼ 点击收起详情' : '▶ 点击查看详情' }}</span>
+                    </template>
+                  </div>
+                  <div class="video-meta" v-else>
                     <span class="expand-hint">{{ expandedVideo === video.path ? '▼ 点击收起详情' : '▶ 点击查看详情' }}</span>
                   </div>
                 </div>
@@ -335,6 +368,14 @@ async function startCompress() {
                 >
                   ×
                 </el-button>
+              </div>
+              <!-- 压缩进度条 -->
+              <div v-if="getVideoProgress(video.filename) && (getVideoProgress(video.filename)?.status === 'running' || getVideoProgress(video.filename)?.status === 'completed')" class="video-progress">
+                <el-progress
+                  :percentage="getVideoProgress(video.filename)?.progress || 0"
+                  :status="getVideoProgress(video.filename)?.status === 'completed' ? 'success' : undefined"
+                  :stroke-width="6"
+                />
               </div>
               <!-- 展开的详情面板 -->
               <div v-if="expandedVideo === video.path" class="video-detail">
@@ -497,24 +538,6 @@ async function startCompress() {
           >
             {{ store.isCompressing ? '压缩中...' : '开始压缩' }}
           </el-button>
-        </div>
-
-        <!-- 压缩进度 -->
-        <div class="panel-card" v-if="store.compressProgress.length > 0">
-          <div class="card-title">压缩进度</div>
-          <div class="progress-list">
-            <div
-              v-for="progress in store.compressProgress"
-              :key="progress.jobId"
-              class="progress-item"
-            >
-              <div class="progress-filename">{{ progress.filename }}</div>
-              <el-progress
-                :percentage="progress.progress"
-                :status="progress.status === 'completed' ? 'success' : progress.status === 'failed' ? 'exception' : undefined"
-              />
-            </div>
-          </div>
         </div>
       </div>
     </div>
@@ -700,6 +723,30 @@ async function startCompress() {
   color: #409eff;
   margin-left: auto;
   cursor: pointer;
+}
+
+.progress-text {
+  font-size: 12px;
+  color: #409eff;
+}
+
+.status-completed {
+  font-size: 12px;
+  color: #67c23a;
+}
+
+.status-failed {
+  font-size: 12px;
+  color: #f56c6c;
+}
+
+.video-item.compressing {
+  background: #ecf5ff;
+}
+
+.video-progress {
+  padding: 0 16px 12px 16px;
+  background: #f5f7fa;
 }
 
 .video-item-wrapper {

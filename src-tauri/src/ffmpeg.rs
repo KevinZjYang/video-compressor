@@ -2,6 +2,21 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
 
+/// 跨平台创建隐藏窗口的命令
+#[cfg(windows)]
+fn create_hidden_command(program: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let mut cmd = Command::new(program);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+#[cfg(not(windows))]
+fn create_hidden_command(program: &str) -> Command {
+    Command::new(program)
+}
+
 /// FFmpeg 信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FfmpegInfo {
@@ -13,10 +28,10 @@ pub struct FfmpegInfo {
 /// 获取 FFmpeg 路径
 pub fn get_ffmpeg_path() -> Option<PathBuf> {
     // 1. 先检查系统 PATH - 直接运行 ffmpeg 看是否可用
-    if let Ok(output) = Command::new("ffmpeg").arg("-version").output() {
+    if let Ok(output) = create_hidden_command("ffmpeg").arg("-version").output() {
         if output.status.success() {
             // ffmpeg 在 PATH 中，使用 which/where 获取路径
-            if let Ok(path_output) = Command::new("where").arg("ffmpeg").output() {
+            if let Ok(path_output) = create_hidden_command("where").arg("ffmpeg").output() {
                 if path_output.status.success() {
                     let path_str = String::from_utf8_lossy(&path_output.stdout);
                     if let Some(first) = path_str.lines().next() {
@@ -30,7 +45,7 @@ pub fn get_ffmpeg_path() -> Option<PathBuf> {
     }
 
     // 2. 使用 where 命令查找
-    if let Ok(output) = Command::new("where").arg("ffmpeg").output() {
+    if let Ok(output) = create_hidden_command("where").arg("ffmpeg").output() {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout);
             if let Some(first) = path.lines().next() {
@@ -83,7 +98,13 @@ pub fn get_ffmpeg_path() -> Option<PathBuf> {
 
 /// 获取 FFmpeg 版本
 fn get_ffmpeg_version(path: &PathBuf) -> String {
-    if let Ok(output) = Command::new(path).arg("-version").output() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    if let Ok(output) = Command::new(path)
+        .creation_flags(CREATE_NO_WINDOW)
+        .arg("-version")
+        .output()
+    {
         if output.status.success() {
             let version = String::from_utf8_lossy(&output.stdout);
             // 提取版本号，如 "ffmpeg version 6.1"
@@ -113,14 +134,14 @@ pub fn get_ffmpeg_info() -> Result<FfmpegInfo, String> {
 /// 检查 winget 是否可用
 #[tauri::command]
 pub fn check_winget() -> bool {
-    Command::new("winget").arg("--version").output().is_ok()
+    create_hidden_command("winget").arg("--version").output().is_ok()
 }
 
 /// 安装 FFmpeg
 #[tauri::command]
 pub async fn install_ffmpeg() -> Result<String, String> {
     // 使用 winget 安装 FFmpeg
-    let output = Command::new("winget")
+    let output = create_hidden_command("winget")
         .args(["install", "-e", "--id", "Gyan.FFmpeg", "--accept-source-agreements", "--accept-package-agreements"])
         .output()
         .map_err(|e| format!("Failed to run winget: {}", e))?;

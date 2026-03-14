@@ -6,8 +6,22 @@ mod analyzer;
 mod preset;
 mod compressor;
 
-use tauri::Manager;
 use std::process::Command;
+
+/// 跨平台创建隐藏窗口的命令
+#[cfg(windows)]
+fn create_hidden_command(program: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let mut cmd = Command::new(program);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+#[cfg(not(windows))]
+fn create_hidden_command(program: &str) -> Command {
+    Command::new(program)
+}
 
 pub use ffmpeg::*;
 pub use encoder::*;
@@ -19,7 +33,7 @@ pub use compressor::*;
 #[tauri::command]
 fn get_gpu_name() -> Result<String, String> {
     // 获取所有显卡，优先返回包含关键字的（Intel Arc, NVIDIA, AMD）
-    let output = Command::new("powershell")
+    let output = create_hidden_command("powershell")
         .args(["-Command", "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"])
         .output()
         .map_err(|e| e.to_string())?;

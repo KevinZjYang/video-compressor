@@ -68,6 +68,8 @@ export interface CompressProgress {
   status: "pending" | "running" | "completed" | "failed";
   error?: string;
   outputPath?: string;
+  elapsedTime: number; // 已使用时间（秒）
+  estimatedRemainingTime: number; // 预估剩余时间（秒）
 }
 
 // 预估结果

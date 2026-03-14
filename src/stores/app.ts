@@ -219,11 +219,12 @@ export const useAppStore = defineStore("app", () => {
         ];
       }
 
-      // 自动选择 GPU 编码器
+      // 自动选择 GPU 编码器（优先选择h264，兼容性更好）
       const gpuEncoder = encoders.value.find(
-        e => e.hardware === "qsv" || e.hardware === "nvenc" || e.hardware === "amf"
+        e => (e.hardware === "qsv" || e.hardware === "nvenc" || e.hardware === "amf") &&
+             (e.name.includes("h264") || e.name.includes("avc"))
       );
-      const fallbackEncoder = encoders.value.find(e => e.type === "video");
+      const fallbackEncoder = encoders.value.find(e => e.type === "video" && e.name.includes("h264"));
       if (gpuEncoder) {
         manualOptions.value.encoder = gpuEncoder.name;
       } else if (fallbackEncoder) {
@@ -316,7 +317,9 @@ export const useAppStore = defineStore("app", () => {
       jobId: `job-${index}`,
       filename: job.inputPath.split(/[\\/]/).pop() || "",
       progress: 0,
-      status: "pending" as const
+      status: "pending" as const,
+      elapsedTime: 0,
+      estimatedRemainingTime: 0
     }));
 
     try {

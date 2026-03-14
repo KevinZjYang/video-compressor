@@ -2,7 +2,20 @@ use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::path::Path;
 
-use crate::ffmpeg::get_ffmpeg_path;
+/// 跨平台创建隐藏窗口的命令
+#[cfg(windows)]
+fn create_hidden_command(program: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let mut cmd = Command::new(program);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+#[cfg(not(windows))]
+fn create_hidden_command(program: &str) -> Command {
+    Command::new(program)
+}
 
 /// 视频信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,7 +42,7 @@ pub struct VideoInfo {
 pub fn analyze_video(path: String) -> Result<VideoInfo, String> {
     let ffprobe_path = get_ffprobe_path()?;
 
-    let output = Command::new(&ffprobe_path)
+    let output = create_hidden_command(ffprobe_path.to_str().unwrap_or(""))
         .args([
             "-v", "quiet",
             "-print_format", "json",
@@ -135,7 +148,7 @@ pub fn analyze_video(path: String) -> Result<VideoInfo, String> {
     })
 }
 
-fn get_ffprobe_path() -> Result<std::path::PathBuf, String> {
+pub fn get_ffprobe_path() -> Result<std::path::PathBuf, String> {
     // 1. 检查资源目录
     if let Ok(exe_dir) = std::env::current_exe() {
         if let Some(dir) = exe_dir.parent() {
@@ -157,7 +170,7 @@ fn get_ffprobe_path() -> Result<std::path::PathBuf, String> {
     }
 
     // 3. 检查系统 PATH
-    if let Ok(output) = Command::new("where").arg("ffprobe").output() {
+    if let Ok(output) = create_hidden_command("where").arg("ffprobe").output() {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout);
             if let Some(first) = path.lines().next() {

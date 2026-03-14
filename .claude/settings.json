@@ -16,7 +16,8 @@
       "Bash(cmd /c \"C:\\\\Users\\\\yzj03\\\\AppData\\\\Local\\\\Microsoft\\\\WinGet\\\\Links\\\\ffmpeg.exe -encoders\")",
       "WebFetch(domain:minimax-algeng-chat-tts.oss-cn-wulanchabu.aliyuncs.com)",
       "Bash(powershell -Command \"Get-WmiObject Win32_VideoController | Select-Object Name, DriverVersion\")",
-      "Bash(powershell -Command \"Get-CimInstance Win32_VideoController | Select-Object -First 1 -ExpandProperty Name\")"
+      "Bash(powershell -Command \"Get-CimInstance Win32_VideoController | Select-Object -First 1 -ExpandProperty Name\")",
+      "Bash(cargo build:*)"
     ]
   }
 }

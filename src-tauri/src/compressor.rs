@@ -2,12 +2,53 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use tauri::{Emitter, Window};
 
-use crate::analyzer::VideoInfo;
 use crate::ffmpeg::get_ffmpeg_path;
-use crate::preset::CompressPreset;
+
+/// 跨平台创建隐藏窗口的命令
+#[cfg(windows)]
+fn create_hidden_command(program: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let mut cmd = Command::new(program);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+#[cfg(not(windows))]
+fn create_hidden_command(program: &str) -> Command {
+    Command::new(program)
+}
+
+/// 获取视频时长（秒）
+fn get_video_duration(path: &str) -> Option<f64> {
+    let ffprobe_path = crate::analyzer::get_ffprobe_path().ok()?;
+
+    let output = create_hidden_command(ffprobe_path.to_str().unwrap_or(""))
+        .args([
+            "-v", "quiet",
+            "-print_format", "json",
+            "-show_format",
+            path
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&json_str).ok()?;
+
+    let duration = json.get("format")
+        .and_then(|f| f.get("duration"))
+        .and_then(|d| d.as_str())
+        .and_then(|d| d.parse::<f64>().ok())?;
+
+    Some(duration)
+}
 
 /// 压缩任务
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,8 +100,8 @@ pub fn get_estimate(
     input_path: String,
     options: CompressOptions,
 ) -> Result<EstimateResult, String> {
-    let ffprobe_path = get_ffprobe_path()?;
-    let output = Command::new(&ffprobe_path)
+    let ffprobe_path = crate::analyzer::get_ffprobe_path().map_err(|e| e)?;
+    let output = create_hidden_command(ffprobe_path.to_str().unwrap_or(""))
         .args([
             "-v", "quiet",
             "-print_format", "json",
@@ -123,8 +164,13 @@ pub async fn compress_videos(
             "jobId": format!("job-{}", index),
             "filename": filename,
             "progress": 0,
-            "status": "running"
+            "status": "running",
+            "elapsedTime": 0,
+            "estimatedRemainingTime": 0
         }));
+
+        // 先获取视频时长用于计算进度
+        let video_duration = get_video_duration(&job.input_path).unwrap_or(60.0);
 
         // 构建 FFmpeg 命令
         let mut cmd = vec![
@@ -188,22 +234,72 @@ pub async fn compress_videos(
         cmd.extend(["-c:a".to_string(), "aac".to_string()]);
         cmd.extend(["-b:a".to_string(), format!("{}k", options.audio_bitrate / 1000)]);
 
+        // 添加进度输出参数
+        cmd.extend(["-progress".to_string(), "pipe:1".to_string()]);
+
         // 输出文件
         cmd.push(job.output_path.clone());
 
         // 执行压缩
-        let mut child = Command::new(&ffmpeg_path)
+        let mut child = create_hidden_command(ffmpeg_path.to_str().unwrap_or(""))
             .args(&cmd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("Failed to start ffmpeg: {}", e))?;
 
-        // 等待完成并获取进度
+        // 读取进度输出
+        let start_time = std::time::Instant::now();
+        if let Some(stdout) = child.stdout.take() {
+            use std::io::{BufRead, BufReader};
+            let reader = BufReader::new(stdout);
+            let mut current_time_ms: u64 = 0;
+            let mut progress_interval = std::time::Duration::from_millis(500); // 每500ms更新一次
+
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    if line.starts_with("out_time_ms=") {
+                        if let Ok(time_ms) = line.trim_start_matches("out_time_ms=").parse::<u64>() {
+                            current_time_ms = time_ms;
+
+                            // 计算进度百分比
+                            let current_seconds = current_time_ms as f64 / 1_000_000.0;
+                            let progress = if video_duration > 0.0 {
+                                ((current_seconds / video_duration) * 100.0).min(99.0) as u32
+                            } else {
+                                0
+                            };
+
+                            // 计算已使用时间和预估剩余时间
+                            let elapsed = start_time.elapsed().as_secs_f64();
+                            let estimated_total = if progress > 0 {
+                                elapsed / (progress as f64 / 100.0)
+                            } else {
+                                0.0
+                            };
+                            let remaining = (estimated_total - elapsed).max(0.0);
+
+                            // 发送进度事件
+                            let _ = window.emit("compress-progress", serde_json::json!({
+                                "jobId": format!("job-{}", index),
+                                "filename": filename,
+                                "progress": progress,
+                                "status": "running",
+                                "elapsedTime": elapsed,
+                                "estimatedRemainingTime": remaining
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+
+        // 等待完成
         let status = child.wait().map_err(|e| e.to_string())?;
 
         let progress = if status.success() { 100 } else { 0 };
         let result_status = if status.success() { "completed" } else { "failed" };
+        let elapsed = start_time.elapsed().as_secs_f64();
 
         // 发送完成事件
         let _ = window.emit("compress-progress", serde_json::json!({
@@ -211,7 +307,9 @@ pub async fn compress_videos(
             "filename": filename,
             "progress": progress,
             "status": result_status,
-            "outputPath": job.output_path
+            "outputPath": job.output_path,
+            "elapsedTime": elapsed,
+            "estimatedRemainingTime": 0
         }));
     }
 
@@ -237,7 +335,7 @@ pub async fn trim_video(
         "progress": 0
     }));
 
-    let output = Command::new(&ffmpeg_path)
+    let output = create_hidden_command(ffmpeg_path.to_str().unwrap_or(""))
         .args([
             "-i", &input_path,
             "-ss", &start_str,
@@ -260,18 +358,6 @@ pub async fn trim_video(
     }));
 
     Ok(output_path)
-}
-
-fn get_ffprobe_path() -> Result<std::path::PathBuf, String> {
-    if let Some(ffmpeg) = crate::ffmpeg::get_ffmpeg_path() {
-        if let Some(parent) = ffmpeg.parent() {
-            let ffprobe = parent.join("ffprobe.exe");
-            if ffprobe.exists() {
-                return Ok(ffprobe);
-            }
-        }
-    }
-    Err("ffprobe not found".to_string())
 }
 
 fn format_time(seconds: f64) -> String {
