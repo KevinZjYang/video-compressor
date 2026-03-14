@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "视频压缩器",
+  "productName": "视频压缩器-K",
   "version": "0.1.0",
   "identifier": "com.yzj03.video-compressor",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "视频压缩器",
+        "title": "视频压缩器-K",
         "width": 1200,
         "height": 800,
         "minWidth": 900,
