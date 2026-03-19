@@ -1,21 +1,16 @@
 # FFmpeg 资源文件
 
-本项目需要 FFmpeg 才能运行视频压缩功能。
+本目录用于存放 FFmpeg 二进制文件，打包时会自动包含在应用中。
 
 ## 下载 FFmpeg
 
-1. 访问 FFmpeg 官网下载: https://ffmpeg.org/download.html
-2. 或者直接下载 Windows 构建版本:
-   - https://github.com/BtbN/FFmpeg-Builds/releases
+推荐使用 Gyan.dev 的 essentials 版本（约 80MB），已包含所有 GPU 编码器支持：
 
-## 安装步骤
+1. 访问 https://www.gyan.dev/ffmpeg/builds/
+2. 下载 `ffmpeg-git-essentials.7z`
+3. 解压后将 `ffmpeg.exe` 和 `ffprobe.exe` 复制到此目录
 
-1. 解压下载的 FFmpeg 压缩包
-2. 将以下文件复制到此目录:
-   - `ffmpeg.exe`
-   - `ffprobe.exe`
-
-## 文件路径
+## 文件结构
 
 ```
 resources/
@@ -24,6 +19,14 @@ resources/
     └── ffprobe.exe   # 必须
 ```
 
-## 替代方案
+## 包含的硬件编码器
 
-如果不复制 FFmpeg 到这里，应用会尝试从系统 PATH 中查找 FFmpeg。请确保 ffmpeg 和 ffprobe 命令可以在命令行中运行。
+- **NVIDIA NVENC**: `h264_nvenc`, `hevc_nvenc`, `av1_nvenc`
+- **Intel QSV**: `h264_qsv`, `hevc_qsv`, `av1_qsv`
+- **AMD AMF**: `h264_amf`, `hevc_amf`, `av1_amf`
+- **软件编码**: `libx264`, `libx265`, `libaom-av1`
+
+## 注意事项
+
+- 如果此目录已有 FFmpeg，应用会优先使用内置版本
+- 用户仍可使用自己安装的 FFmpeg（系统 PATH 中的版本会被用作备选）

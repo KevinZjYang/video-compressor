@@ -3,6 +3,7 @@ import { onMounted } from "vue";
 import { useAppStore } from "./stores/app";
 import { open } from "@tauri-apps/plugin-shell";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import pkg from "../package.json";
 
 const store = useAppStore();
 
@@ -38,6 +39,8 @@ const selectLocalFfmpeg = async () => {
     <router-view />
     <div class="footer">
       <span class="brand">视频压缩器-K</span>
+      <span class="divider">|</span>
+      <span class="version">v{{ pkg.version }}</span>
       <span class="divider">|</span>
       <a class="link" @click="openWebsite">官网: https://apphub.yiun.top/</a>
     </div>
@@ -139,6 +142,10 @@ body {
 .footer .brand {
   font-weight: 500;
   color: #606266;
+}
+
+.footer .version {
+  color: #909399;
 }
 
 .footer .divider {

@@ -27,7 +27,24 @@ pub struct FfmpegInfo {
 
 /// 获取 FFmpeg 路径
 pub fn get_ffmpeg_path() -> Option<PathBuf> {
-    // 1. 先检查系统 PATH - 直接运行 ffmpeg 看是否可用
+    // 1. 优先检查打包资源目录 (生产环境)
+    if let Ok(exe_dir) = std::env::current_exe() {
+        if let Some(dir) = exe_dir.parent() {
+            let ffmpeg_path = dir.join("resources").join("ffmpeg").join("ffmpeg.exe");
+            if ffmpeg_path.exists() {
+                return Some(ffmpeg_path);
+            }
+            // 尝试多级父目录
+            if let Some(parent) = dir.parent() {
+                let ffmpeg_path2 = parent.join("resources").join("ffmpeg").join("ffmpeg.exe");
+                if ffmpeg_path2.exists() {
+                    return Some(ffmpeg_path2);
+                }
+            }
+        }
+    }
+
+    // 2. 检查系统 PATH - 直接运行 ffmpeg 看是否可用
     if let Ok(output) = create_hidden_command("ffmpeg").arg("-version").output() {
         if output.status.success() {
             // ffmpeg 在 PATH 中，使用 which/where 获取路径
@@ -44,7 +61,7 @@ pub fn get_ffmpeg_path() -> Option<PathBuf> {
         }
     }
 
-    // 2. 使用 where 命令查找
+    // 3. 使用 where 命令查找
     if let Ok(output) = create_hidden_command("where").arg("ffmpeg").output() {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout);
@@ -67,29 +84,17 @@ pub fn get_ffmpeg_path() -> Option<PathBuf> {
         }
     }
 
-    // 5. 直接检查当前工作目录的 resources/ffmpeg/
+    // 5. 检查开发模式资源目录 (src-tauri/resources/ffmpeg/)
     let current_dir = std::env::current_dir().ok();
     if let Some(dir) = current_dir {
-        let ffmpeg_path = dir.join("resources").join("ffmpeg").join("ffmpeg.exe");
+        let ffmpeg_path = dir.join("src-tauri").join("resources").join("ffmpeg").join("ffmpeg.exe");
         if ffmpeg_path.exists() {
             return Some(ffmpeg_path);
         }
-    }
-
-    // 7. 检查运行目录下的 resources/ffmpeg (开发模式: target/debug/)
-    if let Ok(exe_dir) = std::env::current_exe() {
-        if let Some(dir) = exe_dir.parent() {
-            let ffmpeg_path = dir.join("resources").join("ffmpeg").join("ffmpeg.exe");
-            if ffmpeg_path.exists() {
-                return Some(ffmpeg_path);
-            }
-            // 尝试多级父目录
-            if let Some(parent) = dir.parent() {
-                let ffmpeg_path2 = parent.join("resources").join("ffmpeg").join("ffmpeg.exe");
-                if ffmpeg_path2.exists() {
-                    return Some(ffmpeg_path2);
-                }
-            }
+        // 也支持从 src-tauri/resources/ffmpeg 直接查找（相对路径）
+        let ffmpeg_path2 = dir.join("resources").join("ffmpeg").join("ffmpeg.exe");
+        if ffmpeg_path2.exists() {
+            return Some(ffmpeg_path2);
         }
     }
 
@@ -153,7 +158,17 @@ pub fn check_winget() -> bool {
 /// 安装 FFmpeg
 #[tauri::command]
 pub async fn install_ffmpeg() -> Result<String, String> {
-    // 使用 winget 安装 FFmpeg
+    // 检查是否已有打包的 FFmpeg
+    if let Ok(exe_dir) = std::env::current_exe() {
+        if let Some(dir) = exe_dir.parent() {
+            let bundled_ffmpeg = dir.join("resources").join("ffmpeg").join("ffmpeg.exe");
+            if bundled_ffmpeg.exists() {
+                return Ok("FFmpeg 已内置于应用中，无需额外安装".to_string());
+            }
+        }
+    }
+
+    // 使用 winget 安装 FFmpeg (仅当没有内置版本时)
     let output = create_hidden_command("winget")
         .args(["install", "-e", "--id", "Gyan.FFmpeg", "--accept-source-agreements", "--accept-package-agreements"])
         .output()

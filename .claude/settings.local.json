@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(npx vite:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(dir \"src-tauri\\\\target\\\\release\\\\bundle\")",
+      "Bash(find src-tauri/target/release -name *.exe -o -name resources -type d)"
     ]
   }
 }
