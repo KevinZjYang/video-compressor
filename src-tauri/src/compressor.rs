@@ -188,6 +188,8 @@ pub async fn compress_videos(
 
         // 视频编码器 - 根据用户选择的编码器使用对应的GPU编码
         let encoder_name = options.encoder.clone();
+        let is_hardware_encoder = encoder_name.contains("qsv") || encoder_name.contains("nvenc") || encoder_name.contains("amf");
+
         if encoder_name.contains("qsv") {
             // Intel QSV: h264_qsv 或 hevc_qsv
             let video_encoder = if encoder_name.contains("hevc") || encoder_name.contains("h265") {
@@ -199,6 +201,7 @@ pub async fn compress_videos(
             };
             cmd.extend(["-c:v".to_string(), video_encoder.to_string()]);
             cmd.extend(["-b:v".to_string(), format!("{}k", options.bitrate / 1000)]);
+            // QSV 不需要 preset 参数
         } else if encoder_name.contains("nvenc") {
             // NVIDIA NVENC: h264_nvenc 或 hevc_nvenc
             let video_encoder = if encoder_name.contains("hevc") || encoder_name.contains("h265") {
@@ -210,6 +213,8 @@ pub async fn compress_videos(
             };
             cmd.extend(["-c:v".to_string(), video_encoder.to_string()]);
             cmd.extend(["-b:v".to_string(), format!("{}k", options.bitrate / 1000)]);
+            // NVENC 使用 medium 预设
+            cmd.extend(["-preset".to_string(), "medium".to_string()]);
         } else if encoder_name.contains("amf") {
             // AMD AMF: h264_amf 或 hevc_amf
             let video_encoder = if encoder_name.contains("hevc") || encoder_name.contains("h265") {
@@ -221,6 +226,7 @@ pub async fn compress_videos(
             };
             cmd.extend(["-c:v".to_string(), video_encoder.to_string()]);
             cmd.extend(["-b:v".to_string(), format!("{}k", options.bitrate / 1000)]);
+            // AMF 不需要 preset 参数
         } else {
             // 软件编码
             let video_encoder = if encoder_name.contains("hevc") || encoder_name.contains("h265") {
@@ -232,10 +238,9 @@ pub async fn compress_videos(
             };
             cmd.extend(["-c:v".to_string(), video_encoder.to_string()]);
             cmd.extend(["-b:v".to_string(), format!("{}k", options.bitrate / 1000)]);
+            // 软件编码使用预设
+            cmd.extend(["-preset".to_string(), options.preset.clone()]);
         }
-
-        // 编码预设
-        cmd.extend(["-preset".to_string(), options.preset.clone()]);
 
         // 音频直接复制或重新编码
         cmd.extend(["-c:a".to_string(), "aac".to_string()]);

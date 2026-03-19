@@ -152,48 +152,79 @@ export const useAppStore = defineStore("app", () => {
   // 显卡类型检测
   const gpuType = ref<'intel' | 'nvidia' | 'amd' | 'unknown'>('unknown');
   const gpuName = ref<string>('');
+  const allGpus = ref<{name: string, gpu_type: string}[]>([]);
 
   // 检测显卡类型
   async function detectGpu() {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
+      // 获取所有显卡信息
+      allGpus.value = await invoke<{name: string, gpu_type: string}[]>("get_all_gpus");
       gpuName.value = await invoke<string>("get_gpu_name");
-      const name = gpuName.value.toLowerCase();
-      if (name.includes('intel') || name.includes('arc') || name.includes('zako')) {
-        gpuType.value = 'intel';
-      } else if (name.includes('nvidia') || name.includes('geforce') || name.includes('rtx') || name.includes('gtx')) {
+
+      // 根据所有显卡确定支持的编码器类型
+      const hasIntel = allGpus.value.some(g => g.gpu_type === 'integrated');
+      const hasNvidia = allGpus.value.some(g =>
+        g.name.toLowerCase().includes('nvidia') ||
+        g.name.toLowerCase().includes('geforce') ||
+        g.name.toLowerCase().includes('rtx') ||
+        g.name.toLowerCase().includes('gtx')
+      );
+      const hasAmd = allGpus.value.some(g =>
+        g.name.toLowerCase().includes('amd') ||
+        g.name.toLowerCase().includes('radeon')
+      );
+
+      // 优先显示独显类型
+      if (hasNvidia) {
         gpuType.value = 'nvidia';
-      } else if (name.includes('amd') || name.includes('radeon')) {
+      } else if (hasAmd) {
         gpuType.value = 'amd';
+      } else if (hasIntel) {
+        gpuType.value = 'intel';
+      } else {
+        gpuType.value = 'unknown';
       }
-      console.log('Detected GPU:', gpuName, 'Type:', gpuType.value);
+      console.log('Detected GPUs:', allGpus.value, 'Primary Type:', gpuType.value);
     } catch (e) {
       console.error('Failed to detect GPU:', e);
       gpuType.value = 'unknown';
     }
   }
 
-  // 有用的视频编码器（根据用户显卡动态过滤）
+  // 有用的视频编码器（根据所有显卡动态过滤）
   const usefulVideoEncoders = computed(() => {
-    // 根据显卡类型决定允许的GPU编码器
+    // 根据所有显卡决定允许的GPU编码器（只要有任何一种GPU就允许使用）
+    const hasIntel = allGpus.value.some(g => g.gpu_type === 'integrated');
+    const hasNvidia = allGpus.value.some(g =>
+      g.name.toLowerCase().includes('nvidia') ||
+      g.name.toLowerCase().includes('geforce') ||
+      g.name.toLowerCase().includes('rtx') ||
+      g.name.toLowerCase().includes('gtx')
+    );
+    const hasAmd = allGpus.value.some(g =>
+      g.name.toLowerCase().includes('amd') ||
+      g.name.toLowerCase().includes('radeon')
+    );
+
     let gpuEncoders: string[] = [];
-    switch (gpuType.value) {
-      case 'intel':
-        gpuEncoders = ['h264_qsv', 'hevc_qsv', 'av1_qsv'];
-        break;
-      case 'nvidia':
-        gpuEncoders = ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'];
-        break;
-      case 'amd':
-        gpuEncoders = ['h264_amf', 'hevc_amf', 'av1_amf'];
-        break;
-      default:
-        // 未知显卡，显示所有GPU编码器供选择
-        gpuEncoders = [
-          'h264_qsv', 'hevc_qsv', 'av1_qsv',
-          'h264_nvenc', 'hevc_nvenc', 'av1_nvenc',
-          'h264_amf', 'hevc_amf', 'av1_amf'
-        ];
+    if (hasIntel) {
+      gpuEncoders.push('h264_qsv', 'hevc_qsv', 'av1_qsv');
+    }
+    if (hasNvidia) {
+      gpuEncoders.push('h264_nvenc', 'hevc_nvenc', 'av1_nvenc');
+    }
+    if (hasAmd) {
+      gpuEncoders.push('h264_amf', 'hevc_amf', 'av1_amf');
+    }
+
+    // 如果没有任何GPU，显示所有GPU编码器供选择
+    if (gpuEncoders.length === 0) {
+      gpuEncoders = [
+        'h264_qsv', 'hevc_qsv', 'av1_qsv',
+        'h264_nvenc', 'hevc_nvenc', 'av1_nvenc',
+        'h264_amf', 'hevc_amf', 'av1_amf'
+      ];
     }
 
     // 允许列表：GPU编码器 + 软件编码器
@@ -437,6 +468,7 @@ export const useAppStore = defineStore("app", () => {
     showFfmpegGuide,
     gpuType,
     gpuName,
+    allGpus,
 
     // Computed
     hasGpuEncoder,
