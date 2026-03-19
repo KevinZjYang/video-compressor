@@ -579,7 +579,7 @@ onUnmounted(() => {
           </el-tag>
           <!-- 显卡信息 -->
           <el-tag type="info" effect="plain">
-            显卡: {{ store.gpuName || store.gpuType }}
+            显卡: {{ store.allGpus.map(g => g.name).join(', ') || store.gpuType }}
           </el-tag>
         </div>
 
@@ -641,7 +641,12 @@ onUnmounted(() => {
                       <span class="status-failed">已取消</span>
                     </template>
                     <template v-else-if="getVideoProgress(video.filename)?.status === 'failed'">
-                      <span class="status-failed">压缩失败</span>
+                      <el-tooltip
+                        :content="getVideoProgress(video.filename)?.error || '压缩失败'"
+                        placement="top"
+                        :disabled="!getVideoProgress(video.filename)?.error">
+                        <span class="status-failed">压缩失败</span>
+                      </el-tooltip>
                     </template>
                     <template v-else>
                       <span class="expand-hint">{{ expandedVideo === video.path ? '▼ 点击收起详情' : '▶ 点击查看详情' }}</span>
@@ -722,6 +727,10 @@ onUnmounted(() => {
                     <span class="detail-value">{{ video.audioBitrate && video.audioBitrate > 0 ? formatBitrate(video.audioBitrate) : '-' }}</span>
                   </div>
                 </div>
+                <div v-if="getVideoProgress(video.filename)?.status === 'failed'" class="detail-section">
+                  <div class="detail-title">错误信息</div>
+                  <div class="error-message">{{ getVideoProgress(video.filename)?.error }}</div>
+                </div>
               </div>
             </div>
           </div>
@@ -755,7 +764,7 @@ onUnmounted(() => {
 
           <el-form label-width="80px" size="default">
             <el-form-item label="编码器">
-              <el-select v-model="store.manualOptions.encoder" placeholder="选择编码器">
+              <el-select v-model="store.manualOptions.encoder" placeholder="选择编码器" @change="onManualParamChange">
                 <el-option
                   v-for="enc in store.usefulVideoEncoders"
                   :key="enc.name"
@@ -1280,6 +1289,17 @@ onUnmounted(() => {
 
 .detail-section:last-child {
   margin-bottom: 0;
+}
+
+.error-message {
+  font-size: 12px;
+  color: #f56c6c;
+  background: #fef0f0;
+  padding: 8px 12px;
+  border-radius: 4px;
+  word-break: break-all;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
 .detail-title {

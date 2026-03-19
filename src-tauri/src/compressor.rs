@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Window};
 
@@ -260,6 +260,26 @@ pub async fn compress_videos(
             .spawn()
             .map_err(|e| format!("Failed to start ffmpeg: {}", e))?;
 
+        // 获取 stderr 用于错误收集
+        let stderr = child.stderr.take();
+        let stderr_output: std::sync::Arc<std::sync::Mutex<String>> = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let stderr_output_clone = std::sync::Arc::clone(&stderr_output);
+
+        // 启动 stderr 读取线程
+        std::thread::spawn(move || {
+            if let Some(stderr) = stderr {
+                use std::io::{BufRead, BufReader};
+                let reader = BufReader::new(stderr);
+                for line in reader.lines() {
+                    if let Ok(line) = line {
+                        let mut output = stderr_output_clone.lock().unwrap();
+                        output.push_str(&line);
+                        output.push('\n');
+                    }
+                }
+            }
+        });
+
         // 读取进度输出
         let start_time = std::time::Instant::now();
         if let Some(stdout) = child.stdout.take() {
@@ -309,6 +329,19 @@ pub async fn compress_videos(
         // 等待完成
         let status = child.wait().map_err(|e| e.to_string())?;
 
+        // 获取错误信息
+        let error_msg = if !status.success() {
+            let stderr_content = stderr_output.lock().unwrap();
+            let error = stderr_content.trim();
+            if error.is_empty() {
+                String::from("未知错误")
+            } else {
+                simplify_error(error)
+            }
+        } else {
+            String::new()
+        };
+
         // 清除当前子进程
         let progress = if status.success() { 100 } else { 0 };
         // 如果是被取消的，状态为 cancelled
@@ -322,7 +355,7 @@ pub async fn compress_videos(
         let elapsed = start_time.elapsed().as_secs_f64();
 
         // 发送完成事件
-        let _ = window.emit("compress-progress", serde_json::json!({
+        let mut event_data = serde_json::json!({
             "jobId": format!("job-{}", index),
             "filename": filename,
             "progress": progress,
@@ -330,10 +363,90 @@ pub async fn compress_videos(
             "outputPath": job.output_path,
             "elapsedTime": elapsed,
             "estimatedRemainingTime": 0
-        }));
+        });
+
+        if !status.success() {
+            event_data["error"] = serde_json::json!(error_msg);
+        }
+
+        let _ = window.emit("compress-progress", event_data);
     }
 
     Ok(())
+}
+
+/// 简化常见错误信息，转换为用户友好的中文提示
+fn simplify_error(error: &str) -> String {
+    let error_lower = error.to_lowercase();
+
+    // Nvidia 驱动版本过低
+    if error_lower.contains("minimum required nvidia driver for nvenc") {
+        return String::from("显卡驱动版本过低，请更新 Nvidia 驱动到 570.0 以上");
+    }
+
+    // 无法加载 NVENC
+    if error_lower.contains("cannot load nvencodeapi64") {
+        return String::from("无法加载 NVENC 编码器，请更新显卡驱动");
+    }
+
+    // 无法加载 CUDA/cuvid
+    if error_lower.contains("cannot load") && error_lower.contains("cuvid") {
+        return String::from("无法加载 CUDA 编码器，请更新显卡驱动");
+    }
+
+    // QSV 编码器错误
+    if error_lower.contains("_qsv") && (error_lower.contains("error") || error_lower.contains("failed")) {
+        return String::from("Intel 核显编码器出错，请更新显卡驱动或尝试其他编码器");
+    }
+
+    // VAAPI 错误
+    if error_lower.contains("vaapi") && (error_lower.contains("error") || error_lower.contains("failed")) {
+        return String::from("VAAPI 编码器出错，请检查显卡驱动");
+    }
+
+    // 权限问题
+    if error_lower.contains("permission denied") || error_lower.contains("access denied") {
+        return String::from("文件权限不足，请尝试以管理员身份运行程序");
+    }
+
+    // 文件不存在
+    if error_lower.contains("no such file") || error_lower.contains("does not exist") {
+        return String::from("文件不存在或路径错误");
+    }
+
+    // 文件格式不支持或已损坏
+    if error_lower.contains("invalid data found") || error_lower.contains("moov atom not found") {
+        return String::from("文件格式不支持或已损坏");
+    }
+
+    // 无音频流
+    if error_lower.contains("no audio streams") || (error_lower.contains("audio") && error_lower.contains("not found")) {
+        return String::from("未找到音频流");
+    }
+
+    // 编码器不支持
+    if error_lower.contains("encoder not found") || error_lower.contains("unknown encoder") {
+        return String::from("编码器不可用，请尝试其他编码器");
+    }
+
+    // 显存不足
+    if error_lower.contains("out of memory") || error_lower.contains("cuda error") {
+        return String::from("显存不足，请尝试降低分辨率或使用 CPU 编码");
+    }
+
+    // 流映射错误
+    if error_lower.contains("stream map") && error_lower.contains("error") {
+        return String::from("无法处理该视频的音视频流");
+    }
+
+    // 原始错误太长则截断显示
+    if error.len() > 300 {
+        let truncated = &error[..300];
+        let first_line = truncated.lines().next().unwrap_or(truncated);
+        return format!("{}", first_line.trim());
+    }
+
+    error.to_string()
 }
 
 /// 剪切视频
